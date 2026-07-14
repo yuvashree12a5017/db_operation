@@ -1,0 +1,60 @@
+{
+  "version": "1.0",
+  "sources": [
+    {
+      "name": "users_pg",
+      "type": "postgres",
+      "connection": {
+        "sqlalchemy_url": "postgresql+asyncpg://etl:${SECRET:PG_SOURCE_PASSWORD}@source:5432/app"
+      },
+      "dataset": {
+        "schema": "public",
+        "table": "users",
+        "columns": ["id", "first_name", "last_name", "balance", "credit", "status"]
+      }
+    }
+  ],
+  "actions": [
+    {
+      "action": "action-filter-dataset",
+      "name": "active_users",
+      "input": ["users_pg"],
+      "config": {
+        "condition": {"column": "status", "op": "eq", "value": "ACTIVE"}
+      }
+    }
+  ],
+  "target": {
+    "type": "postgres",
+    "connection": {
+      "sqlalchemy_url": "postgresql+psycopg://etl:${SECRET:PG_TARGET_PASSWORD}@target:5432/warehouse"
+    },
+    "schema": "analytics",
+    "table": "customer_summary",
+    "write_mode": "overwrite",
+    "create_if_missing": true,
+    "column_mappings": [
+      {"target_column": "customer_id", "source_column": "id", "nullable": false},
+      {
+        "target_column": "full_name",
+        "operation": {
+          "type": "concat",
+          "columns": ["first_name", "last_name"],
+          "separator": " "
+        }
+      },
+      {
+        "target_column": "total_balance",
+        "operation": {"type": "add", "columns": ["balance", "credit"]}
+      },
+      {"target_column": "load_source", "literal": "DB_TO_DB_CODEX"}
+    ]
+  },
+  "options": {
+    "parallel_load": true,
+    "max_rows_per_source": 1000000,
+    "final_dataset": "active_users",
+    "include_action_audit": true
+  },
+  "node_runId": "e4021416-cdb9-48aa-9907-aeaa28e35bc7"
+}
