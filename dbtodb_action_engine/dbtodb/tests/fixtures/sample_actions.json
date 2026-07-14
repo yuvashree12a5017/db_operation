@@ -1,0 +1,126 @@
+{
+  "action_filter_dataset_replace": {
+    "action": "action-filter-dataset",
+    "name": "active_users",
+    "input": ["users_pg"],
+    "config": {
+      "condition": { "and": [
+        { "column": "status", "op": "eq", "value": "ACTIVE" },
+        { "column": "balance", "op": "gt", "value": 1000 }
+      ] }
+    }
+  },
+  "action_filter_dataset_flag_column": {
+    "action": "action-filter-dataset",
+    "name": "users_with_active_flag",
+    "input": ["users_pg"],
+    "config": {
+      "condition": { "column": "status", "op": "eq", "value": "ACTIVE" }
+    },
+    "output": { "mode": "flag_column", "target_column": "is_active" }
+  },
+  "action_row_hash": {
+    "action": "action-row-hash",
+    "name": "hashed_sales",
+    "input": ["validated_sales"],
+    "config": {
+      "columns": ["region", "amount"],
+      "target_column": "row_hash",
+      "algo": "sha256"
+    }
+  },
+  "action_reconciliation_custom_column": {
+    "action": "action-reconciliation",
+    "name": "payment_recon",
+    "input": ["payments_src", "payments_tgt"],
+    "config": {
+      "keys": ["payment_id"],
+      "compare_columns": ["amount", "status"],
+      "tolerance": 0.01
+    },
+    "output": { "mode": "flag_column", "target_column": "payment_recon_status" }
+  },
+  "action_delta_detection_custom_column": {
+    "action": "action-delta-detection",
+    "name": "customer_delta",
+    "input": ["customer_old", "customer_new"],
+    "config": {
+      "keys": ["customer_id"],
+      "compare_columns": ["name", "status", "balance"]
+    },
+    "output": { "mode": "flag_column", "target_column": "customer_change_type" }
+  },
+  "action_anti_join_flag_column": {
+    "action": "action-anti-join",
+    "name": "source_with_target_gap_flag",
+    "input": ["source", "target"],
+    "config": { "on": ["id"] },
+    "output": { "mode": "flag_column", "target_column": "missing_in_target" }
+  },
+  "end_to_end_sample_request": {
+    "version": "1.0",
+    "sources": [
+      {
+        "name": "users_pg",
+        "type": "postgres",
+        "connection": { "sqlalchemy_url": "postgresql+asyncpg://user:${SECRET:PG_PASSWORD}@localhost:5432/appdb" },
+        "dataset": {
+          "schema": "public",
+          "table": "users",
+          "columns": ["id", "name", "status", "created_at", "balance"]
+        }
+      },
+      {
+        "name": "accounts_oracle",
+        "type": "oracle",
+        "connection": { "sqlalchemy_url": "oracle+oracledb://user:${SECRET:ORACLE_PASSWORD}@localhost:1521/?service_name=ACCT" },
+        "dataset": {
+          "schema": "ACCT",
+          "table": "accounts",
+          "columns": ["user_id", "account_balance", "account_status"]
+        }
+      }
+    ],
+    "actions": [
+      {
+        "action": "action-filter-dataset",
+        "name": "active_users",
+        "input": ["users_pg"],
+        "config": { "condition": { "column": "status", "op": "eq", "value": "ACTIVE" } },
+        "output": { "mode": "flag_column", "target_column": "is_active" }
+      },
+      {
+        "action": "action-merge-join",
+        "name": "user_accounts",
+        "input": ["active_users", "accounts_oracle"],
+        "config": {
+          "type": "inner",
+          "on": [ { "left": "id", "right": "user_id" } ]
+        }
+      },
+      {
+        "action": "action-row-hash",
+        "name": "final",
+        "input": ["user_accounts"],
+        "config": {
+          "columns": ["id", "account_balance", "account_status"],
+          "target_column": "row_hash"
+        }
+      }
+    ],
+    "target": {
+      "type": "postgres",
+      "connection": { "sqlalchemy_url": "postgresql+asyncpg://user:${SECRET:PG_PASSWORD}@localhost:5432/analyticsdb" },
+      "schema": "analytics",
+      "table": "user_account_view",
+      "write_mode": "overwrite",
+      "create_if_missing": true
+    },
+    "options": {
+      "parallel_load": true,
+      "final_dataset": "final",
+      "include_action_audit": true
+    },
+    "node_runId": "e4021416-cdb9-48aa-9907-aeaa28e35bc7"
+  }
+}
